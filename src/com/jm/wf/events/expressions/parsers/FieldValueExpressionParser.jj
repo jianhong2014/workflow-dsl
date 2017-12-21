@@ -1,0 +1,1819 @@
+options {
+ STATIC=false;
+}
+PARSER_BEGIN(FieldValueExpressionParser)
+
+package com.jd.wf.events.expressions.parsers;
+
+import DataValue;
+import DataValueFactory;
+import DataValueNull;
+import DataValueType;
+import Expression;
+import ExpressionBase;
+import Factor;
+import FieldValueExpression;
+import LocalVariable;
+import MethodBase;
+import OperatorBase;
+import OperatorBitNot;
+import OperatorCast;
+import OperatorConditional;
+import OperatorLogNot;
+import OperatorUnaryMinus;
+import OperatorUnaryPlus;
+import FilterInterval;
+import FilterIntervalDegenerateBounded;
+import FilterIntervalNonDegenerateBounded;
+import FilterIntervalUnbounded;
+import FilterTemplate;
+import FilterTemplateField;
+import FilterTemplateSubField;
+
+import java.io.InputStream;
+import java.io.Reader;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.apache.log4j.*;
+
+/**
+ * <h2>FieldValueExpressionParser</h2>
+ * The Field Value Expression Parser is primarily intended to produce <b>FieldValueExpression</b>
+ * objects to be used by Data Feed Adapters, the Source Event configuration and framework
+ * components that wish to interact with source event data.
+ * <p>
+ * Field value expressions may contain <b>FilterTemplate</b> objects that are also useful outside
+ * the context of a field value expression. And, in turn, the FilterTemplate may contain <b>FilterInterval</b>
+ * objects as part of sub-fields. To allow creation of these objects the FieldValueExpression parser
+ * exposes the corresponding production rules as entry points that are accessible through the
+ * following static methods:</p>
+ * <ul>
+ * <li>Class&lt;? extends FilterTemplate&gt;.create()</li>
+ * <li>FilterIntervalBase.create()</li>
+ * </ul>
+ */
+public class FieldValueExpressionParser
+{
+	protected Class<?> filterClass = null;
+	protected Logger   logger      = null;
+	
+	protected FieldValueExpression fieldValueExpression = null;
+	
+	protected Map<String, LocalVariable> symbolTable = new HashMap<String, LocalVariable>();
+	
+	public FieldValueExpressionParser(Class<? extends FilterTemplate> filterClass,
+	                                  Logger                          logger,
+	                                  InputStream                     inputStream)
+	{
+		this(inputStream);
+		
+		this.filterClass = filterClass;
+		this.logger      = logger;	
+	}
+	
+	public FieldValueExpressionParser(Class<?> filterClass,
+	                                  Logger   logger,
+	                                  Reader   reader)
+	{
+		this(reader);
+		
+		this.filterClass = filterClass;
+		this.logger      = logger;	
+	}
+	
+}
+
+PARSER_END(FieldValueExpressionParser)
+
+SKIP :
+{
+  " "
+| "\t"
+| "\n"
+| "\r"
+}
+
+TOKEN :
+{
+    < BIT_OR:   "|" >
+    |
+    < BIT_XOR:  "^" >
+    |
+    < BIT_AND:  "&" >
+    |
+    < LSHIFT:   "<" "<" >
+    |
+    < RSHIFT:   ">" ">" >
+    |
+    < PLUS:     "+" >
+    |
+    < MINUS:    "-" >
+    |
+    < MULTIPLY: "*" >
+    |
+    < DIVIDE:   "/" >
+    |
+    < MODULUS:  "%" >
+    |
+    < POWER:    "*" "*" >
+    |
+    < BIT_NOT:  "~" >
+}
+
+TOKEN :
+{
+    < LOG_OR:   "|" "|" >
+    |
+    < LOG_AND:  "&" "&" >
+    |
+    < LOG_EQ:   "=" "=" >
+    |
+    < LOG_NE:   "!" "=" >
+    |
+    < LOG_LT:   "<" >
+    |
+    < LOG_LTE:  "<" "=" >
+    |
+    < LOG_GT:   ">" >
+    |
+    < LOG_GTE:  ">" "=" >
+    |
+    < LOG_NOT:  "!" >
+}
+
+TOKEN :
+{
+	< COND_TRUE:  "?" >
+	|
+	< COND_FALSE: ":" >
+}
+
+TOKEN :
+{
+	< ASSIGN:        "=" >
+	|
+	< PLUS_ASSIGN:   "+" "=" >
+	|
+	< MINUS_ASSIGN:  "-" "=" >
+	|
+	< MULT_ASSIGN:   "*" "=" >
+	|
+	< DIVIDE_ASSIGN: "/" "=" >
+	|
+	< MOD_ASSIGN:    "%" "=" >
+	|
+	< AND_ASSIGN:    "&" "=" >
+	|
+	< OR_ASSIGN:     "|" "=" >
+	|
+	< XOR_ASSIGN:    "^" "=" >
+	|
+	< LSHIFT_ASSIGN: "<" "<" "=" >
+	|
+	< RSHIFT_ASSIGN: ">" ">" "=" >
+}
+
+TOKEN :
+{
+    < LPAREN:     "(" >
+    |
+    < RPAREN:     ")" >
+    |
+    < SEMI_COLON: ";" >
+    |
+    < DOT:        "." >
+    |
+    < FLD_CAT:    "." "." >
+    |
+    < COMMA:      "," >
+    |
+    < LBRACE:     "{" >
+    |
+    < RBRACE:     "}" >
+    |
+    < LBRACKET:   "[" >
+    |
+    < RBRACKET:   "]" >
+}
+
+TOKEN :
+{
+	< INTEGER: (["0"-"9"])+ >
+	|
+  	< REAL:    (["0"-"9"])+ ("." (["0"-"9"])+)? ((["E","e"]) (["+","-"])? (["0"-"9"])+)? >
+    |
+    < HEXNUM:  "0" (["X","x"]) (["0"-"9","A"-"F","a"-"f"])+ >
+}
+
+TOKEN :
+{
+    < IDENTIFIER:    ["a"-"z","A"-"Z","_"] (["a"-"z","A"-"Z","0"-"9",".","_","-"])* >
+    |
+    < VAR_NAME:      "$" <IDENTIFIER> >
+    |
+    < MTHD_NAME:     "@" <IDENTIFIER> >
+}
+
+TOKEN :
+{
+    < QSTRING_LITERAL:
+        "\""
+        (
+            (~["\"","\\","\n","\r"])
+            |
+            (
+                "\\"
+                (
+                    ["n","t","b","r","f","\\","'","\""]
+                )
+            )
+        )*
+        "\""
+        |
+        "'"
+        (
+            (~["\\","'","\n","\r"])
+            |
+            (
+                "\\"
+                (
+                    ["n","t","b","r","f","\\","'","\""]
+                )
+            )
+        )*
+        "'"
+    >
+}
+
+FieldValueExpression FieldValueExpression() :
+{
+	fieldValueExpression = new FieldValueExpression();
+	
+	List<ExpressionBase> expressions = null;
+}
+{
+	expressions = Expressions()
+	{
+		fieldValueExpression.setExpressions(expressions);
+		
+	    return fieldValueExpression;
+	}
+}
+
+List<ExpressionBase> Expressions() :
+{
+	List<ExpressionBase> result = new ArrayList<ExpressionBase>();
+	
+	ExpressionBase expression = null;
+}
+{
+	(
+	    (
+	        expression = Expression()
+	        {
+	        	result.add(expression);
+	        }
+	    )
+	    (
+	        (
+	            <SEMI_COLON>
+	            
+	            expression = Expression()
+	            {
+	        	    result.add(expression);
+	            }
+	        )*
+	    )
+	)
+	{
+		return result;
+	}
+}
+
+ExpressionBase Expression() :
+{
+	Token          varName    = null;
+	ExpressionBase expression = null;
+	ExpressionBase result     = null;
+	ExpressionBase term       = null;
+	OperatorBase   operator   = null;
+}
+{
+	(
+	    (
+            LOOKAHEAD(2)
+	        (
+		        varName = <VAR_NAME>
+		        
+		        operator = AssignOperator()
+	        )
+	        {
+		    	if (operator != null)
+		    	{
+		    		LocalVariable variable = null;
+		    		
+		    		if ((variable = symbolTable.get(varName.image)) == null)
+		    		{
+		    		    variable = new LocalVariable(varName.image,
+		    		                                 fieldValueExpression);
+		    		
+		    		    symbolTable.put(varName.image, variable);
+		    		}
+		    		
+		    		Factor factor = new Factor();
+		    		
+		    		factor.setVariable(variable);
+		    		
+		    		operator.setLhs(factor);
+		    		
+		    		if (result != null)
+		    		{
+		    			((OperatorBase) result).setRhs(operator);
+		    		}
+		    		else
+		    		{
+		    			expression = operator;
+		    		}
+		    		
+		    		result = operator;
+		    	}
+	        }
+	    )*
+	    (
+	    	term = CondTerm()
+	    )
+	    {
+	    	if (operator != null)
+	    	{
+	    		operator.setRhs(term);
+	    	}
+	    	else
+	    	{
+	    		expression = term;
+	    	}
+	    }
+	)
+	{
+		return expression;
+	}
+}
+
+ExpressionBase CondTerm() :
+{
+	ExpressionBase result    = null;
+	OperatorBase   operator  = null;
+	ExpressionBase condTerm  = null;
+	ExpressionBase termTrue  = null;
+	ExpressionBase termFalse = null;
+}
+{
+	(
+	    condTerm = LogOrTerm()
+	    (
+	        <COND_TRUE>
+	        {
+	        	operator = new OperatorConditional();
+	        	
+	    		((OperatorConditional) operator).setCondition(condTerm);
+	        }
+	        
+	        termTrue = CondTerm()
+	        
+	        <COND_FALSE>
+	        
+	        termFalse = CondTerm()
+	    )?
+	    {
+	    	if (operator != null)
+	    	{
+	    	    operator.setLhs(termTrue);
+	    	    operator.setRhs(termFalse);
+	    	
+	    	    result = operator;
+	    	}
+	    	else
+	    	{
+	    		result = condTerm;
+	    	}
+	    }
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase LogOrTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = LogAndTerm()
+	    (
+	        (
+	            operator = LogOrOperator()
+	        
+	            term = LogAndTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase LogAndTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = BitOrTerm()
+	    (
+	        (
+	            operator = LogAndOperator()
+	        
+	            term = BitOrTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase BitOrTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = BitXorTerm()
+	    (
+	        (
+	            operator = BitOrOperator()
+	        
+	            term = BitXorTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase BitXorTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = BitAndTerm()
+	    (
+	        (
+	            operator = BitXorOperator()
+	        
+	            term = BitAndTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase BitAndTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = LogEqTerm()
+	    (
+	        (
+	            operator = BitAndOperator()
+	        
+	            term = LogEqTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase LogEqTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = LogRelTerm()
+	    (
+	        operator = LogEqOperator()
+	        
+	        term = LogRelTerm()
+	    )?
+	    {
+	    	if (operator != null)
+	    	{
+	    	    operator.setLhs(result);
+	    	    operator.setRhs(term);
+	    	
+	    	    result = operator;
+	    	}
+	    }
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase LogRelTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = ShiftTerm()
+	    (
+	        operator = LogRelOperator()
+	        
+	        term = ShiftTerm()
+	    )?
+	    {
+	    	if (operator != null)
+	    	{
+	    	    operator.setLhs(result);
+	    	    operator.setRhs(term);
+	    	
+	    	    result = operator;
+	    	}
+	    }
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase ShiftTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = AddTerm()
+	    (
+	        (
+	            operator = ShiftOperator()
+	        
+	            term = AddTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase AddTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = MulTerm()
+	    (
+	        (
+	            operator = AddOperator()
+	        
+	            term = MulTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase MulTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    result = PowerTerm()
+	    (
+	        (
+	            operator = MulOperator()
+	    
+	            term = PowerTerm()
+	        )
+		    {
+		    	if (operator != null)
+		    	{
+		    	    operator.setLhs(result);
+		    	    operator.setRhs(term);
+		    	
+		    	    result = operator;
+		    	}
+		    }
+	    )*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase PowerTerm() :
+{
+	ExpressionBase result	= null;
+	OperatorBase   operator	= null;
+	ExpressionBase term		= null;
+}
+{
+	(
+		result = CastTerm()
+		(
+			(
+				operator = PowerOperator()
+				
+				term = CastTerm()
+			)
+
+			{
+				if (operator != null)
+		    	{
+		    		operator.setLhs(result);
+		    		operator.setRhs(term);
+		    	
+		    		result = operator;
+		    	}
+			}
+		)*
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase CastTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+	Token          typeName = null;
+}
+{
+	(
+	    (
+            LOOKAHEAD(4)
+	        <LPAREN>
+	        typeName = <IDENTIFIER>
+	        <RPAREN>
+	    )?
+	    (
+	        term = UnaryTerm()
+	    )
+	)
+	{
+		if (typeName != null)
+		{
+			operator = new OperatorCast();
+			
+			((OperatorCast) operator).setCastType(typeName.image);
+			
+			operator.setRhs(term);
+			
+			result = operator;
+		}
+		else
+		{
+			result = term;
+		}
+		
+	    return result;
+	}
+}
+
+ExpressionBase UnaryTerm() :
+{
+	ExpressionBase result   = null;
+	OperatorBase   operator = null;
+	ExpressionBase term     = null;
+}
+{
+	(
+	    (
+	        operator = UnaryOperator()
+	    )?
+	    (
+	        term = MethodTerm()
+	    )
+	)
+	{
+		if (operator != null)
+		{
+			operator.setRhs(term);
+			
+			result = operator;
+		}
+		else
+		{
+			result = term;
+		}
+		
+	    return result;
+	}
+}
+
+ExpressionBase MethodTerm() :
+{
+	ExpressionBase result = null;
+}
+{
+	(
+		(
+		    result = MethodCall()
+		)
+		|
+	    (
+	        result = Factor()
+	    )
+	)
+	{
+	    return result;
+	}
+}
+
+ExpressionBase MethodCall() :
+{
+	MethodBase     method    = null;
+	ExpressionBase parameter = null;
+}
+{
+	(
+	    method = MethodName()
+	    (
+	        (
+		        "("
+		        (
+		            (
+		                parameter = Expression()
+		            )
+		            {
+		            	if (method != null)
+		            	{
+		            		method.addParameter(parameter);
+		            	}
+		            }
+		            (
+			            (
+			                ","
+			                parameter = Expression()
+		                )
+		                {
+			            	if (method != null)
+			            	{
+			            		method.addParameter(parameter);
+			            	}
+		                }
+		            )*
+		        )?
+		        ")"
+	        )?
+	    )
+	)
+	{
+	    return method;
+	}
+}
+
+MethodBase MethodName() :
+{
+	Token methodName = null;
+}
+{
+	(
+        methodName = <MTHD_NAME>
+    )
+    {
+    	return MethodBase.create(methodName.image.substring(1));
+    }
+}
+
+ExpressionBase Factor() :
+{
+	ExpressionBase result        = null;
+	Factor         factor        = new Factor();
+    ExpressionBase expression    = null;
+    ExpressionBase subExpression = null;
+	DataValue      value         = null;
+	FilterTemplate template      = null;
+}
+{
+	(
+	    (
+            value = Number()
+	        {
+	        	factor.setValue(value);
+	        	
+	        	result = factor;
+	        }
+	    )
+	    |
+	    (
+	        token = <QSTRING_LITERAL>
+	        {
+	        	String str = token.image.substring(1, token.image.length()-1); 
+
+	    	    value = DataValueFactory.createDataValue(str,
+	    	                                             DataValueType.eString);
+
+                factor.setValue(value);
+                
+                result = factor;
+	        }
+	    )
+	    |
+	    (
+	        token = <VAR_NAME>
+	        {
+               	LocalVariable variable = symbolTable.get(token.image);
+	                	                                           
+                if (variable == null)
+                {
+                	// If the variable hasn't been defined then add it to the symbol table.
+                	
+	    		    variable = new LocalVariable(token.image,
+	    		                                 fieldValueExpression);
+	    		
+	    		    symbolTable.put(token.image, variable);
+                }
+
+            	// This is a local variable so add it to the symbol cache.
+            	
+                factor.setVariable(variable);
+                
+                result = factor;	                	                                           
+	        }
+	    )
+	    |
+	    (
+	        token = <IDENTIFIER>
+	        {
+	    	    try
+	    	    {
+                    template = (FilterTemplate) filterClass.newInstance();
+                    
+                    template = FilterTemplateFromName(template, token.image, logger);
+                    
+                    factor.setTemplate(template);
+                    
+                    result = factor;
+	    	    }
+	    	    catch (Exception e)
+	    	    {
+	    	    	logger.error(e.getMessage());
+
+	    	    	throw new ParseException(e.getMessage());
+	    	    }
+            }
+	    )
+	    |
+	    (
+	        (
+	            <LPAREN>
+	            (
+	                subExpression = Expression()
+	            )
+	            <RPAREN>
+	        )
+	        {
+	        	expression = new Expression();
+	        	
+	        	((Expression) expression).setSubExpression(subExpression);
+	        	
+	        	result = expression;
+	        }
+	    )
+	)
+	{
+	    return result;
+	}
+}
+
+OperatorBase PowerOperator() :
+{
+	Token op = null;
+}
+{
+	(
+		(
+		    op = <POWER>
+		)
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase AddOperator() :
+{
+	Token op = null;
+}
+{
+	(
+		(
+		    op = <PLUS>
+		)
+		|
+		(
+		    op = <MINUS>
+		)
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase AssignOperator() :
+{
+	Token op = null;
+}
+{
+	(
+	    (
+	        op = <ASSIGN>
+	    )
+	    |
+	    (
+	        op = <PLUS_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <MINUS_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <MULT_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <DIVIDE_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <MOD_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <AND_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <OR_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <XOR_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <LSHIFT_ASSIGN>
+	    )
+	    |
+	    (
+	        op = <RSHIFT_ASSIGN>
+	    )
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase BitAndOperator() :
+{
+	Token op = null;
+}
+{
+	op = <BIT_AND>
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase BitOrOperator() :
+{
+	Token op = null;
+}
+{
+	op = <BIT_OR>
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase BitXorOperator() :
+{
+	Token op = null;
+}
+{
+	op = <BIT_XOR>
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase LogAndOperator() :
+{
+	Token op = null;
+}
+{
+	op = <LOG_AND>
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase LogEqOperator() :
+{
+	Token op = null;
+}
+{
+	(
+		(
+		    op = <LOG_EQ>
+		)
+		|
+		(
+		    op = <LOG_NE>
+		)
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase LogOrOperator() :
+{
+	Token op = null;
+}
+{
+	op = <LOG_OR>
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase LogRelOperator() :
+{
+	Token op = null;
+}
+{
+	(
+		(
+		    op = <LOG_LT>
+		)
+		|
+		(
+		    op = <LOG_LTE>
+		)
+		|
+		(
+		    op = <LOG_GT>
+		)
+		|
+		(
+		    op = <LOG_GTE>
+		)
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase MulOperator() :
+{
+	Token op = null;
+}
+{
+	(
+		(
+		    op = <MULTIPLY>
+		)
+		|
+		(
+		    op = <DIVIDE>
+		)
+		|
+		(
+		    op = <MODULUS>
+		)
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase ShiftOperator() :
+{
+	Token op = null;
+}
+{
+	(
+		(
+		    op = <LSHIFT>
+		)
+		|
+		(
+		    op = <RSHIFT>
+		)
+	)
+	{
+		return OperatorBase.create(op.image);
+	}
+}
+
+OperatorBase UnaryOperator() :
+{
+}
+{
+	(
+	    <PLUS>
+	    {
+	    	return new OperatorUnaryPlus();
+	    }
+	)
+	|
+	(
+	    <MINUS>
+	    {
+	    	return new OperatorUnaryMinus();
+	    }
+	)
+	|
+	(
+	    <BIT_NOT>
+	    {
+	    	return new OperatorBitNot();
+	    }
+	)
+	|
+	(
+	    <LOG_NOT>
+	    {
+	    	return new OperatorLogNot();
+	    }
+	)
+}
+
+DataValue Number() :
+{
+	Token     token = null;
+	DataValue value = null;
+}
+{
+	(
+	    (
+	        token = <INTEGER>
+            {
+                value = DataValueFactory.createDataValue(token.image,
+	    	                                             DataValueType.eInteger);
+	        }
+	    )
+	    |
+	    (
+	        token = <REAL>
+            {
+                value = DataValueFactory.createDataValue(token.image,
+	    	                                             DataValueType.eReal);
+	        }
+	    )
+	    |
+	    (
+	        token = <HEXNUM>
+	        {
+	    	    value = DataValueFactory.createDataValue(token.image,
+	    	                                             DataValueType.eInteger);
+	        }
+	    )
+	)
+	{
+		return value;
+	}
+}
+
+FilterTemplate FilterTemplate(FilterTemplate template, Logger logger) :
+{
+    FilterTemplateField field = null;
+}
+{
+    field = TemplateField(template, logger)
+    {
+    	template.addTemplateField(field);
+    }
+    (
+        <FLD_CAT>
+        field = TemplateField(template, logger)
+        {
+            template.addTemplateField(field);
+        }
+    )*
+    {
+        return template;
+    }
+}
+
+FilterTemplate FilterTemplateFromName(FilterTemplate template, String fieldName, Logger logger) :
+{
+    FilterTemplateField field = null;
+}
+{
+    field = NamedTemplateField(template, fieldName, logger)
+    
+    {
+    	template.addTemplateField(field);
+    }
+    (
+        <FLD_CAT>
+        field = TemplateField(template, logger)
+        {
+            template.addTemplateField(field);
+        }
+    )*
+    {
+        return template;
+    }
+}
+
+FilterTemplateField TemplateField(FilterTemplate template, Logger logger) :
+{
+    String  fieldName   = "";
+    boolean instantiate = true;
+    boolean negate      = false;
+    String  format      = "";
+
+    FilterTemplateField field       = null;
+    FilterTemplateSubField subField = null;
+}
+{
+	instantiate = InstantiateField()
+    fieldName = TemplateFieldName()
+    {
+    	try
+    	{
+    	    field = template.createFilterTemplateField(fieldName);
+    	
+    	    field.instantiateField(instantiate);
+    	}
+    	catch (Exception e)
+    	{
+    		throw new ParseException("Field not supported: " + fieldName);
+    	}
+    }
+    (
+        <LBRACKET>
+            format = FieldFormatString()
+        <RBRACKET>
+    )?
+    {
+    	field.setFormatString(format);
+    }
+    (
+        <LPAREN>
+            negate = NegateField()
+            {
+            	field.negateField(negate);
+            }
+            (
+                subField = TemplateSubField(field, logger)
+                {
+            	    field.addSubField(subField);
+                }
+		        (
+		            <COMMA>
+		            subField = TemplateSubField(field, logger)
+		            {
+		            	field.addSubField(subField);
+		            }
+    	        )*
+	        )?
+        <RPAREN>
+    )?
+    {
+    	return field;
+    }
+}
+
+FilterTemplateField NamedTemplateField(FilterTemplate template, String fieldName, Logger logger) :
+{
+    boolean instantiate = true;
+    boolean negate      = false;
+    String  format      = "";
+
+    FilterTemplateField field       = null;
+    FilterTemplateSubField subField = null;
+}
+{
+    {
+    	try
+    	{
+    	    field = template.createFilterTemplateField(fieldName);
+    	
+    	    field.instantiateField(instantiate);
+    	}
+    	catch (Exception e)
+    	{
+    		throw new ParseException("Field not supported: " + fieldName);
+    	}
+    }
+    (
+        <LBRACKET>
+            format = FieldFormatString()
+        <RBRACKET>
+    )?
+    {
+    	field.setFormatString(format);
+    }
+    (
+        <LPAREN>
+            negate = NegateField()
+            {
+            	field.negateField(negate);
+            }
+            (
+                subField = TemplateSubField(field, logger)
+                {
+            	    field.addSubField(subField);
+                }
+		        (
+		            <COMMA>
+		            subField = TemplateSubField(field, logger)
+		            {
+		            	field.addSubField(subField);
+		            }
+    	        )*
+	        )?
+        <RPAREN>
+    )?
+    {
+    	return field;
+    }
+}
+
+String TemplateFieldName() :
+{
+	Token t;
+}
+{
+	t = <IDENTIFIER>
+	{
+		return t.image;
+	}
+}
+
+boolean InstantiateField() :
+{
+}
+{
+	<BIT_NOT>
+	{
+		return false;
+	}
+	|
+	{
+		return true;
+	}
+}
+
+boolean NegateField() :
+{
+}
+{
+	<LOG_NOT>
+	{
+		return true;
+	}
+	|
+	{
+		return false;
+	}
+}
+
+String FieldFormatString() :
+{
+	Token t;
+}
+{
+	t = <QSTRING_LITERAL>
+	{
+		return t.image.substring(1, t.image.length()-1);
+	}
+}
+
+FilterTemplateSubField TemplateSubField(FilterTemplateField field, Logger logger) :
+{
+	FilterTemplateSubField subField = null;
+	
+	String str;
+	
+	FilterInterval interval = null;
+}
+{
+    str = SubFieldGroupName()
+    {
+    	subField = field.createFilterTemplateSubField(str);
+    }
+    <LBRACE>
+        (
+            LOOKAHEAD(2)
+	        interval = FilterInterval(field.getFieldType())
+	        {
+	        	try
+	        	{
+	        	    subField.addSubFieldInterval(interval);
+	        	}
+	        	catch (Exception e)
+	        	{
+	        		throw new ParseException(e.toString());
+	        	}
+	        }
+	        (
+	            <COMMA>
+	            interval = FilterInterval(field.getFieldType())
+	            {
+	            	try
+	            	{
+	            	    subField.addSubFieldInterval(interval);
+	            	}
+	            	catch (Exception e)
+	            	{
+	            		throw new ParseException(e.toString());
+	            	}
+	            }
+	        )*
+        )?
+    <RBRACE>
+    {
+    	return subField;
+    }
+}
+
+String SubFieldGroupName() :
+{
+	Token t;
+}
+{
+	(
+        t = <IDENTIFIER>
+    )
+    {
+        return t.image;
+    }
+    |
+    (
+        t = <QSTRING_LITERAL>
+    )
+    {
+    	return t.image.substring(1, t.image.length()-1);
+    }
+    |
+    {
+    	return "";
+    }
+}
+
+List<FilterInterval> FilterIntervals(DataValueType type) :
+{
+	List<FilterInterval> filterIntervals = new ArrayList<FilterInterval>();
+	FilterInterval       filterInterval  = null;
+}
+{
+	(
+	    filterInterval = FilterInterval(type)
+	    {
+	    	filterIntervals.add(filterInterval);
+	    }
+	    (
+	        <COMMA>
+	        filterInterval = FilterInterval(type)
+	        {
+	    	    filterIntervals.add(filterInterval);
+	        }
+	    )*
+	)
+	{
+		return filterIntervals;
+	}
+}
+
+FilterInterval FilterInterval(DataValueType type) :
+{
+	FilterInterval filterInterval = null;
+}
+{
+	(
+	    filterInterval = MathsNotation(type)
+	    |
+	    filterInterval = ShorthandNotation(type)
+	)
+	{
+		return filterInterval;
+	}
+}
+
+FilterInterval MathsNotation(DataValueType type) :
+{
+	FilterInterval filterInterval = null;
+	
+	boolean lowerClosed = true;
+	boolean upperClosed = true;
+	
+	DataValue lowerBoundVal = null;
+	DataValue upperBoundVal = null;
+}
+{
+	(
+	    lowerClosed   = LowerBound()
+	    lowerBoundVal = BoundaryValue(type)
+	    <COMMA>
+	    upperBoundVal = BoundaryValue(type)
+	    upperClosed   = UpperBound()
+	)
+	{
+		try
+		{
+		    if (lowerBoundVal != null && upperBoundVal != null)
+		    {
+		    	if (lowerBoundVal.equals(upperBoundVal))
+		    	{
+                    filterInterval = new FilterIntervalDegenerateBounded(lowerClosed,
+			                                                             upperClosed,
+			                                                             lowerBoundVal,
+			                                                             upperBoundVal);
+		    	}
+		    	else
+		    	{
+                    filterInterval = new FilterIntervalNonDegenerateBounded(lowerClosed,
+			                                                                upperClosed,
+			                                                                lowerBoundVal,
+			                                                                upperBoundVal);
+		    	}
+		    }
+		    else
+		    {
+			    filterInterval = new FilterIntervalUnbounded(lowerClosed,
+			                                                 upperClosed,
+			                                                 lowerBoundVal,
+			                                                 upperBoundVal);
+		    }
+		}
+		catch (Exception e)
+		{
+			throw new ParseException(e.toString());
+		}
+		
+	    return filterInterval;
+	}
+}
+
+FilterInterval ShorthandNotation(DataValueType type) :
+{
+	FilterInterval filterInterval = null;
+	
+	DataValue lowerBoundVal = null;
+	DataValue upperBoundVal = null;
+}
+{
+	(
+	    LOOKAHEAD(2)
+		(
+		    lowerBoundVal = BoundaryValue(type)
+		    <MINUS>
+		    upperBoundVal = BoundaryValue(type)
+		)
+		{
+			try
+			{
+			    if (lowerBoundVal != null && upperBoundVal != null)
+			    {
+			        filterInterval = new FilterIntervalNonDegenerateBounded(true,
+			                                                                true,
+			                                                                lowerBoundVal,
+			                                                                upperBoundVal);
+			    }
+			    else
+			    {
+			        filterInterval = new FilterIntervalUnbounded(lowerBoundVal != null ? true : false,
+			                                                     upperBoundVal != null ? true : false,
+			                                                     lowerBoundVal,
+			                                                     upperBoundVal);
+			    }
+		    }
+		    catch (Exception e)
+		    {
+			    throw new ParseException(e.toString());
+		    }
+		}
+		|
+		(
+		    lowerBoundVal = NonNullBoundaryValue(type)
+		)
+		{
+			try
+			{
+			    filterInterval = new FilterIntervalDegenerateBounded(true,
+			                                                         true,
+			                                                         lowerBoundVal,
+			                                                         lowerBoundVal);
+		    }
+		    catch (Exception e)
+		    {
+			    throw new ParseException(e.toString());
+		    }
+		}
+	)
+	{
+		return filterInterval;
+	}
+}
+
+boolean LowerBound() :
+{
+	Token t = null;
+}
+{
+	(
+	    t = <LPAREN>
+	    |
+	    t = <LBRACKET>
+	)
+	{
+		return t.image.equals("[");
+	}
+}
+
+boolean UpperBound() :
+{
+	Token t = null;
+}
+{
+	(
+	    t = <RPAREN>
+	    |
+	    t = <RBRACKET>
+	)
+	{
+		return t.image.equals("]");;
+	}
+}
+
+DataValue BoundaryValue(DataValueType type) :
+{
+	DataValue value = null;
+	Token t;
+}
+{
+	value = NonNullBoundaryValue(type)
+	{
+		return value;
+	}
+	|
+	{
+		return null;
+	}
+}
+
+DataValue NonNullBoundaryValue(DataValueType type) :
+{
+	Token t;
+}
+{
+	t = <INTEGER>
+	{
+		return DataValueFactory.createDataValue(t.image,
+		                                        type == DataValueType.eUnknown ?
+		                                                DataValueType.eString :
+		                                                type);
+	}
+	|
+	t = <REAL>
+	{
+		return DataValueFactory.createDataValue(t.image,
+		                                        type == DataValueType.eUnknown ?
+		                                                DataValueType.eString :
+		                                                type);
+	}
+	|
+	t = <HEXNUM>
+	{
+		return DataValueFactory.createDataValue(t.image,
+		                                        type == DataValueType.eUnknown ?
+		                                                DataValueType.eString :
+		                                                type);
+	}
+	|
+	t = <IDENTIFIER>
+	{
+		return DataValueFactory.createDataValue(t.image,
+		                                        type == DataValueType.eUnknown ?
+		                                                DataValueType.eString :
+		                                                type);
+	}
+	|
+	t = <QSTRING_LITERAL>
+	{
+		return DataValueFactory.createDataValue(t.image.substring(1, t.image.length()-1),
+		                                        type == DataValueType.eUnknown ?
+		                                                DataValueType.eString :
+		                                                type);
+	}
+}

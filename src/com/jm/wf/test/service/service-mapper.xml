@@ -1,0 +1,94 @@
+<wf-mapping>
+	<services>
+		<httpservice name="roleService">
+			<method>get</method>
+			<url></url>
+			<paramTye>para</paramTye>
+			<!-- -para,query,body three type -->
+		</httpservice>
+	</services>
+	<dbs>
+
+		<db name="com.mysql.jdbc.Driver"  jars="mysql-connector-java-5.0.5.jar">>
+			<connection user="root" password="caaf">jdbc:mysql://IP_ADDRESS/caaf</connection>
+			<query>
+				SELECT meas_obj_id, imsi_msisdn
+				FROM rd_crms_customer_groups
+				WHERE id > 9
+				AND type = 'I'
+			</query>
+
+		</db>
+	</dbs>
+	<mappers>
+		<mapper process="PMPProcess" >
+			<srcApi id="summitDemand">
+			   <task name="summitTask">
+				<fields>
+					<field name="taskId">
+						<value>api.body.taskId</value>
+					</field>
+					<field name="delivered">
+						<value>api.body.parent > 0 ? true:false</value>
+					</field>
+					<field name="assinedPO">
+						<value> api.body.assigneee </value>
+					</field>
+					<field name="accepted">
+						<value>true </value>
+					</field>
+					<field name="sum">
+						<value>api.body.parent+api.body.cost</value>
+					</field>
+				</fields>
+				</task>
+			   <decisions switch="api.body.parent > 0">
+					<decision case="true">
+						<task name="splitDemand">
+							<fields>
+								<field name="split">
+									<value>true</value>
+								</field>
+							</fields>
+						</task>
+					</decision>
+				</decisions>
+			</srcApi>
+			<srcApi id="commandApi">
+			   <task name="commonProcessTask">
+				<fields>
+					<field name="taskId">
+						<value>api.body.taskId</value>
+					</field>
+					<field name="actionId">
+						<value>api.body.actionId</value>
+					</field>
+					<decisions switch="api.body.actionId">
+						<decision case="1">
+							<field name="hr_accepted">
+								<value>true</value>
+							</field>
+						</decision>
+						<decision case="2">
+							<field name="hr_forwarded">
+								<value>true</value>
+							</field>
+						</decision>
+					</decisions>
+					<field name="delivered">
+						<value>true</value>
+					</field>
+					<field name="assinedPO">
+						<value> api.body.assigneee </value>
+					</field>
+					<field name="Leader">
+						<values>
+							<value>service.roleService.call(api.body.assinee)</value>
+						</values>
+					</field>
+				</fields>
+				 </task>
+			</srcApi>
+		</mapper>
+	</mappers>>
+</wf-mapping>
